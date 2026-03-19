@@ -1,0 +1,31 @@
+# ============================================================
+# Auth config — contains real credentials (TenantId, ClientId,
+# CertificateThumbprint). Copy the .example file and fill in
+# your values. Never commit the real file.
+# ============================================================
+M365AuthConfig.psd1
+
+# ============================================================
+# Certificate files — NEVER commit private keys
+# ============================================================
+*.cer
+*.pfx
+
+# ============================================================
+# Report output — CSV exports may contain sensitive user data
+# ============================================================
+Exports/
+
+# ============================================================
+# Work-in-progress / broken files
+# ============================================================
+Sharepoint/Broken-SPOExternalUsersReport.ps1
+Ondrive/Not_Working_OneDriveUsageReport.ps1
+
+# ============================================================
+# OS / editor noise
+# ============================================================
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.tmp

@@ -1,11 +1,6 @@
-﻿
-<#
+﻿<#
 =============================================================================================
 Name:           Get all enterprise apps and their owners 
-Version:        1.0
-Website:        o365reports.com
-
-
 Script Highlights:  
 ~~~~~~~~~~~~~~~~~
 1. The script exports all enterprise apps along with its owners in Microsoft Entra.  
@@ -20,18 +15,11 @@ Script Highlights:
 10. Exports applications from external tenants only. 
 11. The script uses MS Graph PowerShell and installs MS Graph PowerShell SDK (if not installed already) upon your confirmation.  
 12. Exports the report result to CSV. 
-13. The script can be executed with an MFA enabled account too. 
-14. It can be executed with certificate-based authentication (CBA) too. 
-15. The script is schedular-friendly.  
-
-For detailed Script execution: https://o365reports.com/2024/11/26/export-all-enterprise-apps-and-their-owners-in-microsoft-entra/
-
-
+13. The script can be sheduled to run automatically.  
 ============================================================================================
 #>
 Param
 (
-    [switch]$CreateSession,
     [string]$TenantId,
     [string]$ClientId,
     [string]$CertificateThumbprint,
@@ -45,53 +33,25 @@ Param
     [Switch]$HomeTenantAppsOnly,
     [Switch]$ExternalTenantAppsOnly
 )
-Function Connect_MgGraph
-{
- #Check for module installation
- $Module=Get-Module -Name Microsoft.Graph -ListAvailable
- if($Module.count -eq 0) 
- { 
-  Write-Host Microsoft Graph PowerShell SDK is not available  -ForegroundColor yellow  
-  $Confirm= Read-Host Are you sure you want to install module? [Y] Yes [N] No 
-  if($Confirm -match "[yY]") 
-  { 
-   Write-host "Installing Microsoft Graph PowerShell module..."
-   Install-Module Microsoft.Graph -Repository PSGallery -Scope CurrentUser -AllowClobber -Force
-  }
-  else
-  {
-   Write-Host "Microsoft Graph PowerShell module is required to run this script. Please install module using Install-Module Microsoft.Graph cmdlet." 
-   Exit
-  }
- }
- #Disconnect Existing MgGraph session
- if($CreateSession.IsPresent)
- {
-  Disconnect-MgGraph
- }
 
+# Import shared auth helper module
+Import-Module "${PSScriptRoot}\..\M365AuthModule.psm1" -Force
 
- Write-Host Connecting to Microsoft Graph...
- if(($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
- {  
-  Connect-MgGraph  -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint -NoWelcome
- }
- else
- {
-  Connect-MgGraph -Scopes "Application.Read.All"  -NoWelcome
- }
-}
-Connect_MgGraph
+# Connect to Graph (will use config file / params for cert auth or interactive)
+Connect-M365Services -Services Graph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphScopes @('Application.Read.All')
 
-$Location=Get-Location
-$ExportCSV = "$Location\EnterpriseApps_and_their_Owners_Report_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm-ss` tt).ToString()).csv"
+# Ensure output folder exists
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+
+$ExportCSV = Join-Path $ExportsDir "EnterpriseApps_and_their_Owners_Report_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm-ss tt').ToString()).csv"
 $PrintedCount=0
 $Count=0
 $TenantGUID= (Get-MgOrganization).Id
 
 
-$RequiredProperties=@('DisplayName','AccountEnabled','Id','SigninAudience','Tags','AppRoleAssignmentRequired','ServicePrincipalType','AdditionalProperties','AppDisplayName')
-Get-MgServicePrincipal -All | foreach {
+$RequiredProperties=@('DisplayName','AccountEnabled','Id','Tags','AppRoleAssignmentRequired','ServicePrincipalType','AdditionalProperties','AppDisplayName','AppOwnerOrganizationId','createdDateTime')
+Get-MgServicePrincipal -All -Property $RequiredProperties | ForEach-Object {
  $Print=1
  $Count++
  $EnterpriseAppName=$_.DisplayName
@@ -116,8 +76,8 @@ Get-MgServicePrincipal -All | foreach {
  {
   $AccessScope="All users can access"
  }
- [DateTime]$CreationTime=($_.AdditionalProperties.createdDateTime)
- $CreationTime=$CreationTime.ToLocalTime()
+ $parsedDate = $_.AdditionalProperties.createdDateTime -as [DateTime]
+ $CreationTime = if ($parsedDate) { $parsedDate.ToLocalTime() } else { '-' }
  $ServicePrincipalType=$_.ServicePrincipalType
  $AppRegistrationName=$_.AppDisplayName
  $AppOwnerOrgId=$_.AppOwnerOrganizationId
@@ -181,13 +141,10 @@ Get-MgServicePrincipal -All | foreach {
    $ExportResult | Export-Csv -Path $ExportCSV -Notype -Append
   }
 }
+Write-Progress -Activity "Processed enterprise apps" -Completed
+Disconnect-MgGraph | Out-Null
 
- Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
- Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to get access to 1800+ Microsoft 365 reports. ~~" -ForegroundColor Green `n`n
- 
-
-
-#Open output file after execution 
+#Open output file after execution
  If($PrintedCount -eq 0)
  {
   Write-Host No data found for the given criteria
@@ -201,12 +158,6 @@ Get-MgServicePrincipal -All | foreach {
 
    Write-Host `n The Output file available in: -NoNewline -ForegroundColor Yellow
    Write-Host $ExportCSV 
-   $Prompt = New-Object -ComObject wscript.shell      
-  $UserInput = $Prompt.popup("Do you want to open output file?",`   
- 0,"Open Output File",4)   
-  If ($UserInput -eq 6)   
-   {   
-    Invoke-Item "$ExportCSV"   
-   } 
-  }
+  
  }
+}

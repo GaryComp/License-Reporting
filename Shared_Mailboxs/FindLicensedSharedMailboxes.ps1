@@ -14,10 +14,10 @@ Param
     [string]$ClientId,
     [string]$CertificateThumbprint,
     [string]$UserName,
-    [string]$Password
+    [SecureString]$Password
 )
 
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 Connect-M365Services -Services "Graph","ExchangeOnline" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -UserName $UserName -Password $Password -GraphScopes "User.Read.All","Organization.Read.All"
 
 
@@ -26,7 +26,9 @@ Write-Host "`nBuilding license SKU lookup table..." -ForegroundColor Cyan
 $SkuTable = @{}
 Get-MgSubscribedSku | ForEach-Object { $SkuTable[$_.SkuId] = $_.SkuPartNumber }
 
-$ExportCSV = ".\LicensedSharedMailboxesReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$ExportCSV = Join-Path $ExportsDir "LicensedSharedMailboxesReport_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm tt').ToString()).csv"
 $Count = 0
 
 Write-Host "Retrieving licensed shared mailboxes..." -ForegroundColor Cyan
@@ -37,7 +39,7 @@ Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-
     $Name = $_.DisplayName
 
     # Retrieve license assignments from Graph
-    $UserLicenses = (Get-MgUser -UserId $UPN -Property AssignedLicenses).AssignedLicenses
+    $UserLicenses = (Get-MgUser -UserId $UPN -Property AssignedLicenses -ErrorAction SilentlyContinue).AssignedLicenses
 
     # Skip if no licenses assigned
     if ($UserLicenses.Count -eq 0) { return }
@@ -46,12 +48,16 @@ Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-
     Write-Progress -Activity "Found $Count licensed shared mailboxes" -Status "Currently processing: $Name"
 
     $LitigationHoldEnabled = $_.LitigationHoldEnabled
-    $InPlaceHoldEnabled = if ($_.InPlaceHolds -ne $null -and $_.InPlaceHolds.Count -gt 0) { "True" } else { "False" }
+    $InPlaceHoldEnabled = if ($null -ne $_.InPlaceHolds -and $_.InPlaceHolds.Count -gt 0) { "True" } else { "False" }
 
-    $MailboxItemSize = (Get-MailboxStatistics -Identity $UPN).TotalItemSize.Value
-    $MailboxItemSizeParts = $MailboxItemSize.ToString().Split("()")
-    $MBSize = $MailboxItemSizeParts | Select-Object -Index 0
-    $MBSizeInBytes = $MailboxItemSizeParts | Select-Object -Index 1
+    $MBSize = "-"
+    $MBSizeInBytes = "-"
+    $MailboxStats = Get-MailboxStatistics -Identity $UPN -ErrorAction SilentlyContinue
+    if ($null -ne $MailboxStats -and $null -ne $MailboxStats.TotalItemSize) {
+        $MailboxItemSizeParts = $MailboxStats.TotalItemSize.Value.ToString().Split("()")
+        $MBSize = $MailboxItemSizeParts | Select-Object -Index 0
+        $MBSizeInBytes = $MailboxItemSizeParts | Select-Object -Index 1
+    }
 
     # Resolve SKU GUIDs to friendly part numbers
     $AssignedLicenses = ($UserLicenses | ForEach-Object {
@@ -68,18 +74,15 @@ Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-
         'Assigned Licenses'       = $AssignedLicenses
     } | Export-Csv $ExportCSV -NoTypeInformation -Append
 }
+Write-Progress -Activity "Processing shared mailboxes" -Completed
 
-# Open output file after execution
+Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+
 If ($Count -eq 0) {
-    Write-Host "No shared mailbox found with a license."
+    Write-Host "No shared mailbox found with a license." -ForegroundColor Yellow
 } else {
     Write-Host "`nThe output file contains $Count licensed shared mailboxes."
-    if (Test-Path -Path $ExportCSV) {
-        Write-Host "`nThe output file is available at:" -NoNewline -ForegroundColor Yellow
-        Write-Host " $ExportCSV"
-        $Prompt = New-Object -ComObject wscript.shell
-        If ($UserInput -eq 6) {
-            Invoke-Item "$ExportCSV"
-        }
-    }
+    Write-Host "Report available at: " -NoNewline -ForegroundColor Yellow
+    Write-Host $ExportCSV
 }

@@ -35,11 +35,12 @@ Param(
     [ValidateSet( "Paid", "Trial", "Free")]
     [string]$LicenseType,
     [string[]]$LicensePlanList,
-    [switch]$CreateSession,
     [string]$TenantId,
     [string]$ClientId,
     [string]$CertificateThumbprint
 )
+
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 
 if (-not $InactiveDays -and -not $ReturnNeverLoggedInUser) {
     do {
@@ -51,40 +52,12 @@ if (-not $InactiveDays -and -not $ReturnNeverLoggedInUser) {
     $InactiveDays = [int]$InactiveDays
 }
 
-Function Connect_MgGraph {
-    #Check for module installatiion
-    $Module = Get-Module -Name microsoft.graph -ListAvailable
-    if($Module.Count -eq 0){
-        Write-Host "Microsoft Graph PowerShell SDK is not available"  -ForegroundColor yellow 
-        $Confirm = Read-Host Are you sure want to install the module? [Y]Yes [N]No
-        if($Confirm -match [Yy]){
-            Write-Host "Installing Microsoft Graph PowerShell module..."
-            Install-Module Microsoft.Graph -Repository PSGallery -Scope CurrentUser -AllowClobber -Force
-        }
-        else{
-            Write-Host "Microsoft Graph PowerShell module is required to run this script. Please install module using Install-Module Microsoft.Graph cmdlet." 
-            Exit
-        }
-    }
-    #Disconnect Existing MgGraph session
-    if ($CreateSession.IsPresent) {
-    	Disconnect-MgGraph | Out-Null
-    }
-     Write-Host "`nConnecting to Microsoft Graph..." 
-    if(($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
-    {  
-        Connect-MgGraph  -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint -NoWelcome
-    }
-    else{
-        Connect-MgGraph -Scopes  "User.Read.All", "Group.Read.All", "Organization.Read.All", "AuditLog.Read.All" -NoWelcome
-    }
-}
+Connect-M365Services -Services "Graph" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -GraphScopes "User.Read.All","Group.Read.All","Organization.Read.All","AuditLog.Read.All"
 
-Connect_MgGraph
-
-$Location = Get-Location
-$ExportCSV = "$Location\UnusedM365LicensesByLastSignIn_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm-ss` tt).ToString()).csv"
-$ExportResult = ""
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$ExportCSV = Join-Path $ExportsDir "UnusedM365LicensesByLastSignIn_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm-ss tt').ToString()).csv"
+$ExportResult = $null
 $Count = 0
 $PrintedUsers = 0
 
@@ -95,8 +68,12 @@ if( $ImportCSVPath -ne "" -and !(Test-Path $ImportCSVPath)){
 
 #Get Licenses
 $FriendlyNameHash = @{}
-Import-Csv -Path ".\LicenseFriendlyName.csv" -ErrorAction Stop | ForEach-Object{
-    $FriendlyNameHash[$_.String_Id] = $_.Product_Display_Name
+$LicenseFriendlyNamePath = Join-Path $PSScriptRoot '..' 'Supporting_Files' 'LicenseFriendlyName.txt'
+if (Test-Path $LicenseFriendlyNamePath) {
+    $loaded = Get-Content -Raw -Path $LicenseFriendlyNamePath -ErrorAction SilentlyContinue | ConvertFrom-StringData
+    if ($loaded) { $FriendlyNameHash = $loaded }
+} else {
+    Write-Host "Warning: LicenseFriendlyName.txt not found. License friendly names will not be resolved." -ForegroundColor Yellow
 }
 $LicenseMap = @{}
 if($ImportCSVPath -ne ""){
@@ -122,7 +99,7 @@ $LifeCycleDateInfo | ForEach-Object{
 #Retrieve Users
 Write-Host "`nRetrieving inactive users with assigned licenses..."
 $RequiredProperties = @('UserPrincipalName','DisplayName','SignInActivity','UserType','CreatedDateTime','AccountEnabled', 'LicenseAssignmentStates', 'Department','JobTitle')  
-Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | ForEach-Object{
+Get-MgUser -All -Property $RequiredProperties | Select-Object $RequiredProperties | ForEach-Object{
     $Count++
     $UPN = $_.UserPrincipalName
     Write-Progress -Activity "        Processing  user: $($count) $($UPN)" 
@@ -133,25 +110,25 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
     $LastNon_InterativeSignIn = $_.SignInActivity.LastNonInteractiveSignInDateTime
     $CreatedDate = $_.CreatedDateTime
     $AccountEnabled = $_.AccountEnabled
-    $Department = if($_.Department -eq $null) {" -"} else{$_.Department}
-    $JobTitle = if($_.JobTitle -eq $null) {" -"} else{$_.JobTitle}
+    $Department = if($null -eq $_.Department) {" -"} else{$_.Department}
+    $JobTitle = if($null -eq $_.JobTitle) {" -"} else{$_.JobTitle}
     $TotalLicenses = 0
     $LicenseStates = $_.LicenseAssignmentStates 
     $Print = 1
     
     #Calculate Inactive users days
-    if($LastSuccessfulSigninDate -eq $null){
+    if($null -eq $LastSuccessfulSigninDate){
         $LastSuccessfulSigninDate = "Never Logged In"
         $InactiveUserDays = "-"
     }else{
         $InactiveUserDays = (New-TimeSpan -Start $LastSuccessfulSigninDate).Days
     }
 
-    if($LastInteractiveSignIn -eq $null){
+    if($null -eq $LastInteractiveSignIn){
         $LastInteractiveSignIn = "Never Logged In"
     }
 
-    if($LastNon_InterativeSignIn -eq $null){
+    if($null -eq $LastNon_InterativeSignIn){
         $LastNon_InterativeSignIn = "Never Logged In"
     }
 
@@ -222,7 +199,7 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
                     
                     #Filter Free Licensed User
                     if($LicenseType -eq "Free"){
-                        if($ExpiryDate -ne $null){
+                        if($null -ne $ExpiryDate){
                             $Flag = 0
                         }
                     }
@@ -236,7 +213,7 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
 
                     #Filter Paid Licensed User
                     if($LicenseType -eq "Paid"){
-                        if(($ExpiryDate -eq $null) -or ($MoreSkuDetails.isTrial)){
+                        if(($null -eq $ExpiryDate) -or ($MoreSkuDetails.isTrial)){
                             $Flag = 0
                         }
                     }
@@ -244,7 +221,7 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
                     if($Flag -eq 1){
                         if($LicenseName){
                             $LicensePartNumbers += $LicensePartNumber
-                            if($State.AssignedByGroup -ne $null){
+                            if($null -ne $State.AssignedByGroup){
                                 $Groups += (Get-MgGroup -GroupId $State.AssignedByGroup -ErrorAction SilentlyContinue).DisplayName
                                 $GroupLicense += $LicenseName
                             }
@@ -273,7 +250,7 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
     }
     
     #LicenseCount above users only
-    if($LicenseCount -ne $null){
+    if($null -ne $LicenseCount){
         if($LicenseCount -gt $TotalLicenses){
             $Print = 0
         }
@@ -287,25 +264,17 @@ Get-MgUser -All -Property $RequiredProperties | select $RequiredProperties | For
     }
 }
 
+Write-Progress -Activity "Processing users" -Completed
 Disconnect-MgGraph | Out-Null
 
-Write-Host `nScript executed successfully.
-Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to access 3,000+ reports and 450+ management actions across your Microsoft 365 environment. ~~" -ForegroundColor Green `n`n
+Write-Host "`nScript completed. Processed $Count user(s) — $PrintedUsers matched the criteria."
 
-#Open output file after execution
-if(((Test-Path -Path $ExportCSV) -eq "True"))
+if($PrintedUsers -eq 0)
 {
-    Write-Host "Exported report has $($PrintedUsers) user(s)." 
-    $Prompt = New-Object -ComObject wscript.shell
-    $UserInput = $Prompt.popup("Do you want to open output file?",` 0,"Open Output File",4)
-    if ($UserInput -eq 6)
-    {  
-        Invoke-Item "$ExportCSV"
-    }
-    Write-Host "The generated report is available in:" -NoNewline -ForegroundColor Yellow; Write-Host "$($ExportCSV)"
+    Write-Host "No users found matching the given criteria." -ForegroundColor Yellow
 }
 else
 {
-    Write-Host "No user found" -ForegroundColor Red
+    Write-Host "The generated report is available in: " -NoNewline -ForegroundColor Yellow
+    Write-Host $ExportCSV
 }

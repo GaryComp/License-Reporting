@@ -1,110 +1,134 @@
-﻿<#
+<#
 =============================================================================================
-Name:     Get OneDrive Usage Report in Microsoft 365      
-Version:  1.0
-Website:  o365reports.com   
+Name:           OneDrive for Business Usage Report
+Version:        2.0
+Website:        ClutchSolutions.com
 
 ~~~~~~~~~~~~~~~~~~
 Script Highlights:
 ~~~~~~~~~~~~~~~~~~
-1. The script allows you to export OneDrive usage report for all OneDrive sites.
-2. The script uses SharePoint Online Management Shell module and installs it if not already present (with user confirmation).
-3. Exports the report result to CSV.
+    """_summary_
+    """1. Reports OneDrive for Business storage consumption for all licensed users.
+2. Includes user details: city, country, department, job title.
+3. Calculates quota used (GB), storage used (GB), and percentage used.
+4. Exports report results to CSV in the shared Exports folder.
+5. Supports certificate-based (unattended), credential-based, and interactive authentication.
+6. Automatically handles tenants with obscured report data, restoring the setting after the run.
+7. Uses the shared M365AuthModule for consistent authentication across all scripts.
 
-For detailed script execution:https://o365reports.com/2025/09/16/get-onedrive-usage-report-in-microsoft-365/
+~~~~~~~~~~~~~~~~~~
+Required Graph Permissions (Application or Delegated):
+~~~~~~~~~~~~~~~~~~
+  - User.Read.All
+  - Reports.Read.All
+  - ReportSettings.ReadWrite.All   (only required if tenant has obscured report names)
 
+~~~~~~~~~~~
+Change Log:
+~~~~~~~~~~~
+V1.0 (21-Feb-2024) - Original script (github.com/12Knocksinna/Office365itpros)
+V2.0 (17-Mar-2026) - Refactored for Clutch Solutions: shared auth module, Exports folder,
+                      Param block, division-by-zero guard, path hardening.
 ============================================================================================
 #>
-
-
-param (
-    [string] $UserName,
-    [string] $Password,
-    [string] $HostName
-       
+Param(
+    [string]$TenantId             = "",
+    [string]$ClientId             = "",
+    [string]$CertificateThumbprint = ""
 )
 
-#Checks SharePointOnline module availability and connects the module
-Function ConnectSPOService
-{
- $SPOService = (Get-Module Microsoft.Online.SharePoint.PowerShell -ListAvailable).Name
- if ($SPOService -eq $null) 
- {
-  Write-host "Important: SharePoint Online Management Shell module is unavailable. It is mandatory to have this module installed in the system to run the script successfully."  
-  $confirm = Read-Host Are you sure you want to install module? [Y] Yes [N] No  
-  if ($confirm -match "[Y]") 
-  { 
-   Write-host `n"Installing SharePoint Online Management Shell Module"
-   Install-Module -Name Microsoft.Online.SharePoint.PowerShell -Allowclobber -Repository PSGallery -Force -Scope CurrentUser
-   Import-Module Microsoft.Online.SharePoint.PowerShell -DisableNameChecking
-  }
-  else 
-  { 
-   Write-host "Exiting. `nNote: SharePoint Online Management Shell module must be available in your system to run the script."  
-   Exit 
-  }
- }
-    
- #Connecting to SharePoint Online PowerShell
- if($HostName -eq "")
- {
-  Write-Host SharePoint organization name is required.`nEg: Contoso for admin@Contoso.Onmicrosoft.com -ForegroundColor Yellow
-  $HostName= Read-Host "Please enter SharePoint organization name"  
- }
- $ConnectionUrl = "https://$HostName-admin.sharepoint.com/"  
- Write-Host `n"Connecting SharePoint Online Management Shell..."`n
- if (($UserName -ne "") -and ($Password -ne "") ) 
- {   
-  $SecuredPassword = ConvertTo-SecureString -AsPlainText $Password -Force   
-  $Credential = New-Object System.Management.Automation.PSCredential $UserName, $SecuredPassword   
-  Connect-SPOService -Credential $Credential -Url $ConnectionUrl | Out-Null
- }   
- else 
- {   
-  Connect-SPOService -Url $ConnectionUrl | Out-Null
- }
- 
+# Import shared auth helper module
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
+
+# Connect to Microsoft Graph
+Connect-M365Services -Services Graph `
+    -TenantId $TenantId `
+    -ClientId $ClientId `
+    -CertificateThumbprint $CertificateThumbprint `
+    -GraphScopes @("User.Read.All", "Reports.Read.All", "ReportSettings.ReadWrite.All")
+
+# Ensure Exports folder exists
+$ExportsDir = Join-Path $PSScriptRoot ".." "Exports"
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+
+$CSVOutputFile = Join-Path $ExportsDir "OneDriveUsageReport_$((Get-Date -Format 'yyyy-MMM-dd-ddd_HH-mm-ss').ToString()).csv"
+$TempExportFile = Join-Path $env:TEMP "OD4B_TempExport_$([System.IO.Path]::GetRandomFileName()).csv"
+
+# Check if the tenant has obscured real names for reports
+# Requires ReportSettings.ReadWrite.All — gracefully skip if permission is absent
+$ObscureFlag = $false
+try {
+    If ((Get-MgAdminReportSetting).DisplayConcealedNames -eq $true) {
+        Write-Host "Unhiding obscured report data for the script to run..." -ForegroundColor Yellow
+        Update-MgAdminReportSetting -BodyParameter @{ displayConcealedNames = $false }
+        $ObscureFlag = $true
+    }
+} catch {
+    Write-Host "Unable to check report concealment setting (ReportSettings.ReadWrite.All permission may be missing). Continuing..." -ForegroundColor Yellow
 }
-ConnectSPOService
-$Location=Get-Location
-$ExportCSV="$Location\OneDriveStorageReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv" 
-$Count=0
-Get-SPOSite -IncludePersonalSite $true -Limit all -Filter "Url -like '-my.sharepoint.com/personal/'" | foreach {
- $Count++
- $UserName=$_.Title
- $UPN=$_.Owner
- $Url=$_.Url
- Write-Progress -Activity "`n     Processed OneDrive site count: $Count "`n"  Currently processing site: $url"
- $StorageSize=$_.StorageUsageCurrent
- $LastContentModifiedDate=$_.LastContentModifiedDate
- $StorageQuota=$_.StorageQuota
- $StorageQuotainGB=[math]::round($StorageQuota/1024, 2)
- $StorageSizeinGB=[math]::round($StorageSize/1024, 2)
- $Status=$_.Status
- $ArchiveStatus=$_.ArchiveStatus
- $Result=@{ 'Owner UPN'=$UPN;'OneDrive Url'=$url;'Storage Used (GB)'=$StorageSizeinGB;'Storage Quota (GB)'=$StorageQuotainGB;'Storage Used (MB)'=$StorageSize;'Storage Quota (MB)'=$StorageQuota;'Status'=$Status;'Archive Status'=$ArchiveStatus;'Last Content Modified Date'=$LastContentModifiedDate}
- $Results= New-Object PSObject -Property $Result  
- $Results | Select-Object 'Owner UPN','OneDrive Url','Storage Used (GB)','Storage Quota (GB)','Storage Used (MB)','Storage Quota (MB)','Status','Archive Status','Last Content Modified Date'| Export-Csv -Path $ExportCSV -Notype -Append }
 
+try {
+    # Get user account information into a hash table for lookup
+    Write-Host "Finding user account information..." -ForegroundColor Cyan
+    [array]$Users = Get-MgUser -All `
+        -Filter "assignedLicenses/`$count ne 0 and userType eq 'Member'" `
+        -ConsistencyLevel Eventual -CountVariable UserCount `
+        -Sort "displayName" `
+        -Property Id, displayName, userPrincipalName, city, country, department, jobTitle
 
-Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to access 3,000+ reports and 450+ management actions across your Microsoft 365 environment. ~~" -ForegroundColor Green `n`n
+    $UserHash = @{}
+    foreach ($User in $Users) {
+        $UserHash[$User.userPrincipalName] = $User
+    }
 
- 
+    # Fetch OneDrive usage report via Graph API
+    Write-Host "Finding OneDrive sites..." -ForegroundColor Cyan
+    $Uri = "https://graph.microsoft.com/v1.0/reports/getOneDriveUsageAccountDetail(period='D7')"
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-MgGraphRequest -Uri $Uri -Method GET -OutputFilePath $TempExportFile
+    $ProgressPreference = 'Continue'
 
- if((Test-Path -Path $ExportCSV) -eq "True") 
- {
-  Write-Host `The exported report contains $Count OneDrive sites.
-  Write-Host `nOneDrive sites report available in: -NoNewline -Foregroundcolor Yellow; Write-Host $ExportCSV
-   $Prompt = New-Object -ComObject wscript.shell   
-  $UserInput = $Prompt.popup("Do you want to open output file?",`   
- 0,"Open Output File",4)   
-  If ($UserInput -eq 6)   
-  {   
-   Invoke-Item "$ExportCSV"   
-  } 
- }
- else
- {
-  Write-Host No OneDrive accounts found.
- }
+    [array]$ODFBSites = Import-Csv $TempExportFile | Sort-Object "User display name"
+
+    if (-not $ODFBSites) {
+        Write-Host "No OneDrive sites found." -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Calculate total storage used
+    $TotalODFBGBUsed = [Math]::Round(($ODFBSites."Storage Used (Byte)" | Measure-Object -Sum).Sum / 1GB, 2)
+
+    # Build report
+    $Report = [System.Collections.Generic.List[Object]]::new()
+    foreach ($Site in $ODFBSites) {
+        $UserData    = $UserHash[$Site."Owner Principal name"]
+        $AllocBytes  = [double]$Site."Storage Allocated (Byte)"
+        $UsedBytes   = [double]$Site."Storage Used (Byte)"
+        $PercentUsed = if ($AllocBytes -gt 0) { [Math]::Round(($UsedBytes / $AllocBytes * 100), 4) } else { 0 }
+
+        $Report.Add([PSCustomObject]@{
+            Owner         = $Site."Owner display name"
+            UPN           = $Site."Owner Principal name"
+            City          = $UserData.city
+            Country       = $UserData.country
+            Department    = $UserData.department
+            "Job Title"   = $UserData.jobTitle
+            QuotaGB       = [Math]::Round($AllocBytes / 1GB, 2)
+            UsedGB        = [Math]::Round($UsedBytes / 1GB, 4)
+            PercentUsed   = $PercentUsed
+        })
+    }
+
+    $Report | Export-Csv -NoTypeInformation -Path $CSVOutputFile
+    $Report | Sort-Object UsedGB -Descending | Out-GridView -Title "OneDrive Usage Report"
+    Write-Host ("Current OneDrive for Business storage consumption: {0} GB. Report saved to: {1}" -f $TotalODFBGBUsed, $CSVOutputFile) -ForegroundColor Green
+}
+finally {
+    # Restore tenant report obscure data setting if it was changed
+    if ($ObscureFlag) {
+        Write-Host "Restoring tenant data concealment setting to True..." -ForegroundColor Yellow
+        Update-MgAdminReportSetting -BodyParameter @{ displayConcealedNames = $true }
+    }
+    # Clean up temp file
+    if (Test-Path $TempExportFile) { Remove-Item $TempExportFile -Force }
+}

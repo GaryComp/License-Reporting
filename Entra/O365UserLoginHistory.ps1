@@ -1,9 +1,8 @@
 ﻿<#
 =============================================================================================
 Name:           Office 365 User Login History Report
-Website:        o365reports.com
-Version:        4.0
-
+Description:    This script retrieves the login history of Office 365 users and exports the report to CSV. 
+                The report includes details such as login time, user name, IP address, operation, result status, and workload.  
 Script Highlights: 
 ~~~~~~~~~~~~~~~~~
 
@@ -17,8 +16,6 @@ Script Highlights:
 8.Automatically installs the EXO V2 module (if not installed already) upon your confirmation. 
 9.This script is scheduler friendly. I.e., credentials can be passed as a parameter instead of saving inside the script. 
 10.Our Logon history report tracks login events in AzureActiveDirectory (UserLoggedIn, UserLoginFailed), ExchangeOnline (MailboxLogin) and MicrosoftTeams (TeamsSessionStarted). 
-
-For detailed Script execution: https://o365reports.com/2019/12/23/export-office-365-users-logon-history-report/
 ============================================================================================
 #>
 Param
@@ -33,18 +30,18 @@ Param
     [string]$ClientId,
     [string]$CertificateThumbprint,
     [string]$AdminName,
-    [string]$Password
+    [SecureString]$Password
 )
 
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 
 #Getting StartDate and EndDate for Audit log
-if ((($StartDate -eq $null) -and ($EndDate -ne $null)) -or (($StartDate -ne $null) -and ($EndDate -eq $null)))
+if ((($null -eq $StartDate) -and ($null -ne $EndDate)) -or (($null -ne $StartDate) -and ($null -eq $EndDate)))
 {
  Write-Host `nPlease enter both StartDate and EndDate for Audit log collection -ForegroundColor Red
  exit
 }   
-elseif(($StartDate -eq $null) -and ($EndDate -eq $null))
+elseif(($null -eq $StartDate) -and ($null -eq $EndDate))
 {
  $StartDate=(((Get-Date).AddDays(-90))).Date
  $EndDate=Get-Date
@@ -67,8 +64,9 @@ else
 
 Connect-M365Services -Services "ExchangeOnline" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -UserName $AdminName -Password $Password
 
-$Location=Get-Location
-$OutputCSV="$Location\UserLoginHistoryReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv" 
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$OutputCSV = Join-Path $ExportsDir "UserLoginHistoryReport_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm tt').ToString()).csv"
 $IntervalTimeInMinutes=1440    #$IntervalTimeInMinutes=Read-Host Enter interval time period '(in minutes)'
 $CurrentStart=$StartDate
 $CurrentEnd=$CurrentStart.AddMinutes($IntervalTimeInMinutes)
@@ -95,7 +93,6 @@ if($CurrentEnd -gt $EndDate)
 }
 
 $AggregateResults = 0
-$CurrentResult= @()
 $CurrentResultCount=0
 Write-Host `nRetrieving audit log from $StartDate to $EndDate... -ForegroundColor Yellow
 
@@ -111,13 +108,13 @@ while($true)
  #Getting audit log for specific user(s) for a given time range
  if($UserName -ne "")
  {
-  $Results=Search-UnifiedAuditLog -UserIds $UserName -StartDate $CurrentStart -EndDate $CurrentEnd -operations $Operation -SessionId s -SessionCommand ReturnLargeSet -ResultSize 5000
+  $Results=Search-UnifiedAuditLog -UserIds $UserName -StartDate $CurrentStart -EndDate $CurrentEnd -operations $Operation -SessionId s -SessionCommand ReturnLargeSet -ResultSize 5000 -WarningAction SilentlyContinue
  }
 
  #Getting audit log for all users for a given time range
  else
  {
-  $Results=Search-UnifiedAuditLog -StartDate $CurrentStart -EndDate $CurrentEnd -Operations $Operation -SessionId s -SessionCommand ReturnLargeSet -ResultSize 5000
+  $Results=Search-UnifiedAuditLog -StartDate $CurrentStart -EndDate $CurrentEnd -Operations $Operation -SessionId s -SessionCommand ReturnLargeSet -ResultSize 5000 -WarningAction SilentlyContinue
  }
  $ResultsCount=($Results|Measure-Object).count
  $AllAuditData=@()
@@ -128,13 +125,18 @@ while($true)
   $AuditData.CreationTime=(Get-Date($AuditData.CreationTime)).ToLocalTime()
   $AllAudits=@{'Login Time'=$AuditData.CreationTime;'User Name'=$AuditData.UserId;'IP Address'=$AuditData.ClientIP;'Operation'=$AuditData.Operation;'Result Status'=$AuditData.ResultStatus;'Workload'=$AuditData.Workload}
   $AllAuditData= New-Object PSObject -Property $AllAudits
-  $AllAuditData | Sort 'Login Time','User Name' | select 'Login Time','User Name','IP Address',Operation,'Result Status',Workload | Export-Csv $OutputCSV -NoTypeInformation -Append
+  $AllAuditData | Sort-Object 'Login Time','User Name' | Select-Object 'Login Time','User Name','IP Address',Operation,'Result Status',Workload | Export-Csv $OutputCSV -NoTypeInformation -Append
  }
  
  #$CurrentResult += $Results
  $currentResultCount=$CurrentResultCount+$ResultsCount
  $AggregateResults +=$ResultsCount
- Write-Progress -Activity "`n     Retrieving audit log from $CurrentStart to $CurrentEnd.."`n" Processed audit record count: $AggregateResults"
+ $TotalMinutes   = ($EndDate - $StartDate).TotalMinutes
+ $ElapsedMinutes = ($CurrentStart - $StartDate).TotalMinutes
+ $PercentComplete = [Math]::Min(100, [Math]::Round(($ElapsedMinutes / $TotalMinutes) * 100))
+ Write-Progress -Activity "Retrieving audit log" `
+     -Status "Window: $CurrentStart  →  $CurrentEnd  |  Records so far: $AggregateResults" `
+     -PercentComplete $PercentComplete
  if(($CurrentResultCount -eq 50000) -or ($ResultsCount -lt 5000))
  {
   if($CurrentResultCount -eq 50000)
@@ -169,35 +171,20 @@ while($true)
   }
   
   $CurrentResultCount=0
-  $CurrentResult = @()
  }
- $c=($Results | Measure-Object).Count
 }
+Write-Progress -Activity "Retrieving audit log" -Completed
 
 #Open output file after execution
 If($AggregateResults -eq 0)
 {
- Write-Host No records found
+ Write-Host "No records found for the given criteria." -ForegroundColor Yellow
 }
 else
 {
- if((Test-Path -Path $OutputCSV) -eq "True") 
- {
-  Write-Host ""
-  Write-Host " The Output file availble in:" -NoNewline -ForegroundColor Yellow
-  Write-Host $OutputCSV 
-    Write-Host `nThe output file contains $AggregateResults audit records
-  Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green 
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to get access to 1800+ Microsoft 365 reports. ~~" -ForegroundColor Green `n`n 
-   $Prompt = New-Object -ComObject wscript.shell   
-  $UserInput = $Prompt.popup("Do you want to open output file?",`   
- 0,"Open Output File",4)   
-  If ($UserInput -eq 6)   
-  {   
-   Invoke-Item "$OutputCSV"   
-  } 
- }
- 
+ Write-Host "`nThe output file contains $AggregateResults audit records."
+ Write-Host " The output file available in: " -NoNewline -ForegroundColor Yellow
+ Write-Host $OutputCSV
 }
 
 #Disconnect Exchange Online session

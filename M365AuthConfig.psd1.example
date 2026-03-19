@@ -1,0 +1,27 @@
+@{
+    # TenantId must be the primary domain (e.g. "contoso.onmicrosoft.com").
+    # Exchange Online requires the domain name — it does not accept a GUID.
+    # Graph accepts both formats.
+    TenantId             = "your-tenant.onmicrosoft.com"
+
+    # App Registration (Client) ID — found in Azure AD > App registrations > Overview
+    ClientId             = "00000000-0000-0000-0000-000000000000"
+
+    # Certificate thumbprint — see AppRegistration-Setup.md Step 5
+    CertificateThumbprint = "0000000000000000000000000000000000000000"
+
+    # (Optional) Legacy credential auth.
+    # WARNING: Storing passwords in plain text is NOT recommended.
+    # Consider using SecretManagement/SecretStore instead.
+    UserName             = ""
+    Password             = ""
+
+    # SharePoint admin URL (required when using the SharePoint or PnP service)
+    AdminUrl             = "https://your-tenant-admin.sharepoint.com"
+
+    # (Optional) PnP site URL (required when using the PnP service for a specific site)
+    # SiteUrl = "https://your-tenant.sharepoint.com/sites/YourSite"
+
+    # (Optional) Custom Graph scopes for interactive auth.
+    # GraphScopes = @("User.Read.All","Directory.Read.All","AuditLog.Read.All","Organization.Read.All")
+}

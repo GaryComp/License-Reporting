@@ -28,11 +28,12 @@ For detailed Script execution: https://o365reports.com/2024/12/17/get-distributi
     [string]$CertificateThumbprint,
 	[switch]$IncludeContacts
 	)
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 Connect-M365Services -Services "ExchangeOnline" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -UserName $UserName -Password $Password
 
-$Location=Get-Location
-$OutputCsv="$Location\DLs_with_ExternalUsers_Report_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm` tt).ToString()).csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$OutputCsv = Join-Path $ExportsDir "DLs_with_ExternalUsers_Report_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm tt').ToString()).csv"
 $DLWithExternalUsersCount=0
 $DLCount=0
     

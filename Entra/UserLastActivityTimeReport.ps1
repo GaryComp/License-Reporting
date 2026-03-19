@@ -1,10 +1,6 @@
 ﻿<#
 =============================================================================================
 Name:           Export Office 365 users real last activity time report
-Version:        3.0
-Website:        o365reports.com
-Script by:      O365Reports Team
-
 Script Highlights :
 ~~~~~~~~~~~~~~~~~
 
@@ -19,8 +15,6 @@ Script Highlights :
 9.	The script can be executed with MFA enabled account. 
 10.	The script is scheduler friendly. i.e., credentials can be passed as a parameter instead of saving inside the script. 
 
-
-For detailed script execution:  https://o365reports.com/2019/06/18/export-office-365-users-real-last-logon-time-report-csv/#
 ============================================================================================
 #>
 #If you connect via Certificate based authentication, then your application required "Directory.Read.All" application permission, assign exchange administrator role and  Exchange.ManageAsApp permission to your application.
@@ -43,7 +37,7 @@ Function Get_LastLogonTime
     $MailboxStatistics = Get-MailboxStatistics -Identity $UPN
     $LastActionTime = $MailboxStatistics.LastUserActionTime
     $PercentComplete=($MBUserCount/($Mailboxes.Count))*100
-    Write-Progress -Activity "`n     Processed mailbox count: $MBUserCount out of $($Mailboxes.Count)"`n"  Currently Processing: $DisplayName"  -PercentComplete $PercentComplete
+    Write-Progress -Activity "`n     Processed mailbox count: $MBUserCount out of $($Mailboxes.Count)`n  Currently Processing: $DisplayName" -PercentComplete $PercentComplete
     $Script:MBUserCount++ 
  
     #Retrieve lastlogon time and then calculate Inactive days 
@@ -64,7 +58,7 @@ Function Get_LastLogonTime
         }
     }
     #Get licenses assigned to mailboxes 
-    $Licenses = (Get-MgBetaUserLicenseDetail -UserId $UPN -ErrorAction SilentlyContinue).SkuPartNumber 
+    $Licenses = (Get-MgUserLicenseDetail -UserId $UPN -ErrorAction SilentlyContinue).SkuPartNumber
     $AssignedLicense = @()
     if($Licenses.Count -eq 0) 
     { 
@@ -115,7 +109,7 @@ Function Get_LastLogonTime
         return
     }
     #Get admin roles assigned to user 
-    $RoleList=Get-MgBetaUserTransitiveMemberOf -UserId $UPN|Select-Object -ExpandProperty AdditionalProperties
+    $RoleList=Get-MgUserTransitiveMemberOf -UserId $UPN|Select-Object -ExpandProperty AdditionalProperties
     $RoleList = $RoleList | Where-Object {$_.'@odata.type' -eq '#microsoft.graph.directoryRole'}
     $Roles = @($RoleList.displayName) -join ','
     if($RoleList.count -eq 0)
@@ -150,16 +144,19 @@ $Result = ""
 $MBUserCount = 1 
 
 #Get friendly name of license plan from external file 
-$FriendlyNameHash = Get-Content -Raw -Path .\LicenseFriendlyName.txt -ErrorAction SilentlyContinue -ErrorVariable LicenseFileError | ConvertFrom-StringData
-if($null -ne $LicenseFileError)
-{
-    Write-Host $LicenseFileError -ForegroundColor Red
-    CloseConnection
+$LicenseFriendlyNamePath = Join-Path $PSScriptRoot '..' 'Supporting_Files' 'LicenseFriendlyName.txt'
+$FriendlyNameHash = @{}
+if (Test-Path $LicenseFriendlyNamePath) {
+    $FriendlyNameHash = Get-Content -Raw -Path $LicenseFriendlyNamePath -ErrorAction SilentlyContinue | ConvertFrom-StringData
+    if (-not $FriendlyNameHash) { $FriendlyNameHash = @{} }
+} else {
+    Write-Host "Warning: LicenseFriendlyName.txt not found. License names will not be resolved." -ForegroundColor Yellow
 }
 
 #Set output file 
-$Path = (Get-Location).Path
-$ExportCSV = "$Path\LastAccessTimeReport_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm-ss` tt).ToString()).csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$ExportCSV = Join-Path $ExportsDir "LastAccessTimeReport_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm-ss tt').ToString()).csv"
 
 #Check for input file
 if([string]$MBNamesFile -ne "") 
@@ -195,24 +192,16 @@ else
         $CreationTime = $Mail.WhenCreated
         $MBType = $Mail.RecipientTypeDetails
         Get_LastLogonTime
-    } 
+    }
 }
+Write-Progress -Activity "Processing mailboxes" -Completed
 
 #Open output file after execution 
 if((Test-Path -Path $ExportCSV) -eq "True")
 {
     Write-Host "Detailed report available in:" -NoNewline -Foregroundcolor Yellow; Write-Host $ExportCSV
-    $Prompt = New-Object -ComObject wscript.shell  
-    $UserInput = $Prompt.popup("Do you want to open output file?",` 0,"Open Output File",4)  
-    if ($UserInput -eq 6)  
-    {  
-        Invoke-Item "$ExportCSV"  
-    } 
-}
-else
+    Invoke-Item -Path $ExportCSV}
 {
     Write-Host "No mailbox found" -ForegroundColor Red
 }
-Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to get access to 1800+ Microsoft 365 reports. ~~" -ForegroundColor Green `n`n
 CloseConnection

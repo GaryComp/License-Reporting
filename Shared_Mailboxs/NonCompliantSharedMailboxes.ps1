@@ -1,10 +1,6 @@
 ﻿<#
 =============================================================================================
 Name:           Identify Non-Compliant Shared Mailboxes in Microsoft 365  
-Version:        1.0
-Website:        o365reports.com
-
-
 Script Highlights:  
 ~~~~~~~~~~~~~~~~~
 1. Generates all non-compliant shared mailboxes in Microsoft 365.  
@@ -14,9 +10,6 @@ Script Highlights:
 5. The script supports Certificate-based authentication (CBA). 
 6. The script is scheduler-friendly.   
 
-For detailed Script execution: https://o365reports.com/2024/12/10/identify-non-compliant-shared-mailboxes-in-microsoft-365/
-
-
 ============================================================================================
 #>Param
 (
@@ -25,15 +18,17 @@ For detailed Script execution: https://o365reports.com/2024/12/10/identify-non-c
     [string]$TenantId,
     [string]$CertificateThumbprint,
     [string]$UserName,
-    [string]$Password
+    [SecureString]$Password
 )
 
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 Connect-M365Services -Services "Graph","ExchangeOnline" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -UserName $UserName -Password $Password -GraphScopes "User.Read.All","AuditLog.Read.All"
 
 
 $ProgressIndex = 0
-$OutputCSV = "$(Get-Location)\NonCompliant_Shared_Mailboxes_$((Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')).csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$OutputCSV = Join-Path $ExportsDir "NonCompliant_Shared_Mailboxes_$((Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')).csv"
 $NonCompliantCount = 0
 
 
@@ -46,7 +41,7 @@ $ExchangeOnlineServicePlans = @(
 Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-Object {
     $MailboxName = $_.DisplayName
     $ProgressIndex++
-    Write-Progress -Activity "`n     Processed shared mailbox count: $ProgressIndex"`n"  Checking $MailboxName mailbox"
+    Write-Progress -Activity "Processing shared mailboxes" -Status "Processed: $ProgressIndex | Checking: $MailboxName"
     # Retrieve additional details using Microsoft Graph
     $User = Get-MgUser -UserId $_.ExternalDirectoryObjectId -Property AccountEnabled, DisplayName, UserPrincipalName, SignInActivity | 
             Select-Object DisplayName, UserPrincipalName, AccountEnabled, @{Name="LastSignInTime";Expression={$_.SignInActivity.LastSignInDateTime}}
@@ -74,7 +69,7 @@ Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-
                 "Primary SMTP Address"   = $_.PrimarySmtpAddress
                 "Sign-In Enabled"        = "Enabled"
                 "Exchange License"       = "No"
-                "Last Sign-In Time"      = if ($User.LastSignInTime -eq $null) { "Never logged-in" } else { $User.LastSignInTime }
+                "Last Sign-In Time"      = if ($null -eq $User.LastSignInTime) { "Never logged-in" } else { $User.LastSignInTime }
                 "Creation Time"          = $_.WhenCreated
             }
 
@@ -82,27 +77,17 @@ Get-Mailbox -ResultSize Unlimited -RecipientTypeDetails SharedMailbox | ForEach-
             $NonCompliantDetails | Export-Csv -Path $OutputCSV -NoTypeInformation -Append
         }
     }
-}    
-
-
-Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to get access to 1900+ Microsoft 365 reports. ~~" -ForegroundColor Green `n
+}
+Write-Progress -Activity "Processing shared mailboxes" -Completed
 
 # Disconnect sessions
-#Disconnect-MgGraph | Out-Null
-#Disconnect-ExchangeOnline -Confirm:$false | Out-Null
+Disconnect-MgGraph | Out-Null
+Disconnect-ExchangeOnline -Confirm:$false | Out-Null
 
-
-# Prompt to open CSV if non-compliant mailboxes exist
-if(Test-Path -Path $OutputCSV) {   
-    Write-Host  " Found $NonCompliantCount non-compliant shared mailboxes." -ForegroundColor Yellow;
-    Write-Host  " Output CSV file saved to: " -NoNewline -ForegroundColor Yellow; Write-Host "$OutputCSV"  
-    $Prompt = New-Object -ComObject wscript.shell
-    $UserInput = $Prompt.popup("Do you want to open the output file?",` 0,"Open Output File",4)
-    if ($UserInput -eq 6) {
-        Invoke-Item "$OutputCSV"
-    }
-}
-else {
-    Write-Host `n"No non-compliant shared mailboxes found." 
+if ($NonCompliantCount -eq 0) {
+    Write-Host "`nNo non-compliant shared mailboxes found." -ForegroundColor Yellow
+} else {
+    Write-Host "`nFound $NonCompliantCount non-compliant shared mailboxes."
+    Write-Host "Report available at: " -NoNewline -ForegroundColor Yellow
+    Write-Host $OutputCSV
 }

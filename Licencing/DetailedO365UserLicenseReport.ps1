@@ -1,4 +1,4 @@
-﻿Param
+Param
 (
     [Parameter(Mandatory = $false)]
     [string]$UserNamesFile,
@@ -7,7 +7,7 @@
     [string]$CertificateThumbprint
 )
 
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 
 
 # ------------------------- Export User License Details -------------------------
@@ -69,14 +69,17 @@ Function main {
     Write-Host "`nNote: For best results, run this in a fresh PowerShell window." -ForegroundColor Yellow
 
     $timestamp = (Get-Date -Format "yyyy-MMM-dd-ddd hh-mm tt").ToString()
-    $ExportCSV = ".\DetailedO365UserLicenseReport_$timestamp.csv"
+    $ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+    if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+    $ExportCSV = Join-Path $ExportsDir "DetailedO365UserLicenseReport_$timestamp.csv"
 
     # Try to load mapping file (optional)
     $SkuMapping = $null
     $ServiceMapping = $null
-    if (Test-Path "Product_names_and_service_plan_identifiers.csv") {
+    $skuCsvPath = Join-Path $PSScriptRoot '..' 'Supporting_Files' 'Product names and service plan identifiers for licensing.csv'
+    if (Test-Path $skuCsvPath) {
         try {
-            $csvData = Import-Csv -Path ".\Product_names_and_service_plan_identifiers.csv"
+            $csvData = Import-Csv -Path $skuCsvPath
             if ($csvData | Get-Member -Name "SkuPartNumber" -ErrorAction SilentlyContinue) {
                 $SkuMapping = $csvData | Where-Object { $_.SkuPartNumber -and $_.Product_Display_Name }
             }
@@ -84,7 +87,7 @@ Function main {
                 $ServiceMapping = $csvData | Where-Object { $_.Service_Plan_Name -and $_.ServicePlanDisplayName }
             }
         } catch {
-            Write-Host "âš ï¸ Failed to parse mapping file, continuing without friendly names." -ForegroundColor Yellow
+            Write-Host "Warning: Failed to parse mapping file, continuing without friendly names." -ForegroundColor Yellow
         }
     }
 
@@ -112,11 +115,12 @@ Function main {
         }
     }
 
+    Write-Progress -Activity "Processing users" -Completed
     if (Test-Path -Path $ExportCSV) {
-        Write-Host "`nâœ… Detailed report available at: $ExportCSV" -ForegroundColor Cyan
-        Write-Host "ðŸ“¦ $Global:LicensedUserCount users processed." -ForegroundColor Green
+        Write-Host "`nDetailed report available at: $ExportCSV" -ForegroundColor Cyan
+        Write-Host "$Global:LicensedUserCount users processed." -ForegroundColor Green
     } else {
-        Write-Host "âš ï¸ No data found." 
+        Write-Host "No data found." -ForegroundColor Yellow
     }
     Close-Connection
 }

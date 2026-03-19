@@ -5,38 +5,39 @@ Param(
     [switch]$Purchased,
     [switch]$Expired,
     [switch]$Active,
-    [switch]$CreateSession,
     [string]$TenantId,
     [string]$ClientId,
     [string]$CertificateThumbprint
 )
 
-Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
 Connect-M365Services -Services "Graph" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
 
 # ------------------------- Output Paths -------------------------
 $TimeStamp = Get-Date -Format "yyyy-MMM-dd-ddd__hh-mm_tt"
-$ExportCSV = ".\LicenseExpiryReport_$TimeStamp.csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$ExportCSV = Join-Path $ExportsDir "LicenseExpiryReport_$TimeStamp.csv"
 
 # ------------------------- Load Friendly Names -------------------------
 $FriendlyNameHash = @{}
-if (Test-Path ".\Product_names_and_service_plan_identifiers.csv") {
-    Import-Csv ".\Product_names_and_service_plan_identifiers.csv" | ForEach-Object {
+$skuCsvPath = Join-Path $PSScriptRoot '..' 'Supporting_Files' 'Product names and service plan identifiers for licensing.csv'
+if (Test-Path $skuCsvPath) {
+    Import-Csv $skuCsvPath | ForEach-Object {
         if ($_.SkuPartNumber -and $_.Product_Display_Name) {
             $FriendlyNameHash[$_.SkuPartNumber.Trim()] = $_.Product_Display_Name.Trim()
         }
     }
 }
 else {
-    Write-Host "❌ No friendly name mapping file (Product_names_and_service_plan_identifiers.csv) found in current directory." -ForegroundColor Red
-    return
+    Write-Host "Warning: Product names CSV not found. Friendly names will not be resolved." -ForegroundColor Yellow
 }
 
 # ------------------------- Determine Filters -------------------------
 $ShowAll = -not ($Trial -or $Free -or $Purchased -or $Expired -or $Active)
 
 # ------------------------- Retrieve License Info -------------------------
-Write-Host "`n📦 Retrieving subscribed SKUs..." -ForegroundColor Cyan
+Write-Host "`nRetrieving subscribed SKUs..." -ForegroundColor Cyan
 $Skus = Get-MgSubscribedSku -All
 
 # Lifecycle info (try v1.0, fallback to beta)
@@ -48,7 +49,7 @@ try {
     $lifecycleInfo = (Invoke-MgGraphRequest -Uri $lifecycleUriV1 -Method GET -ErrorAction Stop).value
 }
 catch {
-    Write-Host "⚠️ v1.0 lifecycle endpoint failed, falling back to beta endpoint" -ForegroundColor Yellow
+    Write-Host "Warning: v1.0 lifecycle endpoint failed, falling back to beta endpoint" -ForegroundColor Yellow
     $lifecycleInfo = (Invoke-MgGraphRequest -Uri $lifecycleUriBeta -Method GET -ErrorAction Stop).value
 }
 
@@ -84,7 +85,7 @@ foreach ($Sku in $Skus) {
     if ($SkuPartNumber -like "*Free*" -and -not $ExpiryDate) {
         $Type = "Free"
     }
-    elseif (-not $ExpiryDate) {
+    elseif ($Lifecycle.isTrial) {
         $Type = "Trial"
     }
     else {
@@ -163,9 +164,11 @@ foreach ($Sku in $Skus) {
 # ------------------------- Export -------------------------
 if ($Results.Count -gt 0) {
     $Results | Export-Csv -Path $ExportCSV -NoTypeInformation
-    Write-Host "`n✅ Report saved to:" -NoNewline; Write-Host " $ExportCSV" -ForegroundColor Cyan
-    Write-Host "📦 $($Results.Count) subscriptions included.`n"
+    Write-Host "`nReport saved to: " -NoNewline -ForegroundColor Yellow; Write-Host "$ExportCSV" -ForegroundColor Cyan
+    Write-Host "$($Results.Count) subscriptions included.`n"
 }
 else {
-    Write-Host "⚠️ No subscriptions matched the given filters." -ForegroundColor Yellow
+    Write-Host "No subscriptions matched the given filters." -ForegroundColor Yellow
 }
+
+Disconnect-MgGraph | Out-Null

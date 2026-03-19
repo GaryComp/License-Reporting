@@ -1,9 +1,6 @@
-﻿<#
+<#
 =============================================================================================
 Name: Get Exchange Online Mailbox Folder Statistics Using PowerShell
-Version:1.0
-Website: o365reports.com
-
 ~~~~~~~~~~~~~~~~~
 Script Highlights: 
 ~~~~~~~~~~~~~~~~~
@@ -18,8 +15,6 @@ Script Highlights:
 9. The script is scheduler friendly.
 10. It can be executed with certificate-based authentication (CBA) too.
 
-For detailed script execution:https://o365reports.com/2024/05/21/export-exchange-online-mailbox-folder-statistics-using-powershell/
-
 ============================================================================================
 #>
 
@@ -29,19 +24,20 @@ For detailed script execution:https://o365reports.com/2024/05/21/export-exchange
         [string]$TenantId,
         [string]$CertificateThumbprint,
         [string]$UserName,
-        [string]$Password,
+        [SecureString]$Password,
         [string]$MailboxUPN  ,
         [string]$MailBoxCSV ,
         [switch]$UserMailboxOnly,
         [switch]$SharedMailboxOnly,
         [string]$FolderPaths #Must folderpaths like(/Inbox,/Sent Items,/Inbox/SubFolder)
          )
-    Import-Module "$PSScriptRoot\M365AuthModule.psm1" -Force
+    Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
     Connect-M365Services -Services "ExchangeOnline" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -UserName $UserName -Password $Password
 
 #Outputfile path
-   $Location = Get-Location 
-   $OutputCSV = "$($Location)\MailboxFolderStatisticsReports_$((Get-Date -format 'dd-MMM-yyyy-ddd hh-mm-ss').ToString()).csv"
+   $ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+   if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+   $OutputCSV = Join-Path $ExportsDir "MailboxFolderStatisticsReports_$((Get-Date -format 'dd-MMM-yyyy-ddd hh-mm-ss').ToString()).csv"
   
 #Function to FolderStatistics
  Function GetFolderStatistics($Folder){ 
@@ -96,20 +92,20 @@ Function ProcessSpecificMailboxFolder {
  #Function to get mailbox details
  Function Getmailbox{
    Param($MailboxUPN)
-       $MailBoxInfo = Get-EXOMailbox -UserPrincipalName $MailboxUPN
-       $DisplayName =$MailboxInfo.DisplayName
+       $MailboxInfo = Get-EXOMailbox -UserPrincipalName $MailboxUPN
+       $DisplayName = $MailboxInfo.DisplayName
        $MailboxType = $MailboxInfo.RecipientTypeDetails
-       Process-Mailbox -MailboxUPN $MailboxUPN
+       Invoke-MailboxReport -MailboxUPN $MailboxUPN
  }
- Function Process-Mailbox{   
+ Function Invoke-MailboxReport {
    Param ($MailboxUPN)
-       
-        Write-Progress -Activity "Processed Mailbox count : $ProgressIndex" -Status "Currently Processing : $MailboxUPN"    
-        if($Folderpaths -eq ""){
+
+        Write-Progress -Activity "Processing mailboxes" -Status "Processed: $ProgressIndex | Currently Processing: $MailboxUPN"
+        if ($FolderPaths -eq "") {
            ProcessAllMailboxFolders -MailboxUPN $MailboxUPN
         }
-        else{
-           ProcessSpecificMailboxFolder -MailboxUPN $MailboxUPN -FolderPaths $FolderPaths 
+        else {
+           ProcessSpecificMailboxFolder -MailboxUPN $MailboxUPN -FolderPaths $FolderPaths
         }
 }
  #Single user
@@ -122,12 +118,10 @@ Function ProcessSpecificMailboxFolder {
 #Multiple CSV users
 elseif($MailBoxCSV){ 
         $Mailboxes = Import-Csv -Path $MailBoxCSV
-        $TotalMailboxes = $Mailboxes.Count
         $ProgressIndex = 0
-        Foreach ($Mailbox in $Mailboxes) {
-        $ProgressIndex++
-        Getmailbox -MailboxUPN $Mailbox.Mailboxes
-             
+        foreach ($Mailbox in $Mailboxes) {
+            $ProgressIndex++
+            Getmailbox -MailboxUPN $Mailbox.Mailboxes
         }
 } 
 
@@ -141,50 +135,34 @@ else{
          else {
            $RecipientType = "UserMailbox"
          }
-           Get-EXOMailbox -RecipientTypeDetails $RecipientType  -ResultSize Unlimited| Foreach {
+           Get-EXOMailbox -RecipientTypeDetails $RecipientType -ResultSize Unlimited | ForEach-Object {
            $ProgressIndex++
            $DisplayName =$_.DisplayName
            $MailboxUPN = $_.UserPrincipalName
            $MailboxType = $_.RecipientTypeDetails
       
-           Process-Mailbox -MailboxUPN $MailboxUPN
+           Invoke-MailboxReport -MailboxUPN $MailboxUPN
            }
       }     
       else{ 
-             Get-EXOMailbox -ResultSize Unlimited| Foreach {
+             Get-EXOMailbox -ResultSize Unlimited | ForEach-Object {
              $ProgressIndex++
              $DisplayName =$_.DisplayName
              $MailboxUPN = $_.UserPrincipalName
              $MailboxType = $_.RecipientTypeDetails
-             Process-Mailbox -MailboxUPN $MailboxUPN
+             Invoke-MailboxReport -MailboxUPN $MailboxUPN
              }
          }     
 }     
-if (Test-Path -Path $OutputCSV) {    
-     $ItemCounts = (Import-Csv -Path "$OutputCSV").Count
-   
-    if($ItemCounts -ne 0){
-              
-                         Write-Host "`nThe output file contains $($ProgressIndex) mailboxes and  $($ItemCounts) records." -ForegroundColor Cyan
-         
-                         Write-Host "`nThe output file is available at:" -ForegroundColor Yellow ;Write-Host $OutputCSV -ForegroundColor Cyan
-                         Write-Host "`n~~ Script prepared by AdminDroid Community ~~`n" -ForegroundColor Green
+Write-Progress -Activity "Processing mailboxes" -Completed
 
-                         Write-Host "~~ Check out " -NoNewline -ForegroundColor Green
-                         Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline
-                         Write-Host " to get access to 1800+ Microsoft 365 reports. ~~" -ForegroundColor Green
-                         Write-Host "`n`n"
-                
-                         $Prompt = New-Object -ComObject wscript.shell
-                         $UserInput = $Prompt.popup("Do you want to open the output file?", 0, "Open Output File", 4)
+Disconnect-ExchangeOnline -Confirm:$false
 
-                         if ($UserInput -eq 6) {
-                             Invoke-Item "$OutputCSV"
-                         }
-         }
+if (Test-Path -Path $OutputCSV) {
+    $ItemCounts = (Import-Csv -Path $OutputCSV).Count
+    Write-Host "`nThe output file contains $($ProgressIndex) mailboxes and $($ItemCounts) records." -ForegroundColor Cyan
+    Write-Host "Report available at: " -NoNewline -ForegroundColor Yellow
+    Write-Host $OutputCSV
+} else {
+    Write-Host "No records found." -ForegroundColor Yellow
 }
-else {
-     Write-Host "No records found" -ForegroundColor Yellow
-     }
- #Disconnect Exchange Online session
-  Disconnect-ExchangeOnline -Confirm:$false 

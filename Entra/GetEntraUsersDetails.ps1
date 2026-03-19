@@ -1,10 +1,5 @@
 ﻿<#
 =============================================================================================
-
-Name         : Export all users in Microsoft 365 Using PowerShell  
-Version      : 1.0
-website      : o365reports.com
-
 -----------------
 Script Highlights
 -----------------
@@ -19,16 +14,11 @@ Script Highlights
     -> Users without a manager
 4. Identifies recently created users in Microsoft Entra (e.g., within the last n days).
 5. Exports the report result to CSV.
-6. The script can be executed with an MFA enabled account too.
-7. It can be executed with Certificate-based Authentication (CBA) too.
-8. The script is schedular-friendly.  
-
-For detailed Script execution:  https://o365reports.com/2025/04/15/export-all-entra-users-using-powershell/
+6. This script can be scheduled to run automatically.
 ============================================================================================
 \#>
 Param
 (
-    [switch]$CreateSession,
     [string]$TenantId,
     [string]$ClientId,
     [string]$CertificateThumbprint,
@@ -39,55 +29,22 @@ Param
     [Switch]$LicensedUsersOnly,
     [Switch]$UnlicensedUsersOnly,
     [Switch]$UnmanagedUsers
-    
+
 )
-Function Connect_MgGraph
-{
- #Check for module installation
- $Module=Get-Module -Name Microsoft.Graph -ListAvailable
- if($Module.count -eq 0) 
- { 
-  Write-Host Microsoft Graph PowerShell SDK is not available  -ForegroundColor yellow  
-  $Confirm= Read-Host Are you sure you want to install module? [Y] Yes [N] No 
-  if($Confirm -match "[yY]") 
-  { 
-   Write-host "Installing Microsoft Graph PowerShell module..."
-   Install-Module Microsoft.Graph -Repository PSGallery -Scope CurrentUser -AllowClobber -Force
-  }
-  else
-  {
-   Write-Host "Microsoft Graph PowerShell module is required to run this script. Please install module using Install-Module Microsoft.Graph cmdlet." 
-   Exit
-  }
- }
- #Disconnect Existing MgGraph session
- if($CreateSession.IsPresent)
- {
-  Disconnect-MgGraph | Out-Null
- }
+
+Import-Module "$PSScriptRoot\..\M365AuthModule.psm1" -Force
+Connect-M365Services -Services "Graph" -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint
 
 
- Write-Host Connecting to Microsoft Graph...
- if(($TenantId -ne "") -and ($ClientId -ne "") -and ($CertificateThumbprint -ne ""))  
- {  
-  Connect-MgGraph  -TenantId $TenantId -AppId $ClientId -CertificateThumbprint $CertificateThumbprint -NoWelcome
- }
- else
- {
-  Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All"  -NoWelcome
- }
-}
-Connect_MgGraph
-
-
-$Location=Get-Location 
-$ExportCSV = "$Location\EntraUsers_Report_$((Get-Date -format yyyy-MMM-dd-ddd` hh-mm-ss` tt).ToString()).csv"
+$ExportsDir = Join-Path $PSScriptRoot '..' 'Exports'
+if (-not (Test-Path $ExportsDir)) { New-Item -Path $ExportsDir -ItemType Directory | Out-Null }
+$ExportCSV = Join-Path $ExportsDir "EntraUsers_Report_$((Get-Date -format 'yyyy-MMM-dd-ddd hh-mm-ss tt').ToString()).csv"
 $Count=0
 $PrintedUsers=0
 $RequiredProperties=@('UserPrincipalName','LastPasswordChangeDateTime','AccountEnabled','Country','Department','Jobtitle','SigninActivity','DisplayName','UserType','CreatedDateTime')
 
 Write-Host Generating Entra users report...
-Get-MgUser -All -Property $RequiredProperties  | foreach {
+Get-MgUser -All -Property $RequiredProperties  | ForEach-Object {
  $Print=1
  $UPN=$_.UserPrincipalName
  $DisplayName=$_.DisplayName
@@ -162,23 +119,15 @@ Get-MgUser -All -Property $RequiredProperties  | foreach {
   $Result | Export-Csv -Path $ExportCSV -Notype -Append
  }
 }
+Write-Progress -Activity "Processing users" -Completed
 
 Disconnect-MgGraph | Out-Null
-Write-Host `n~~ Script prepared by AdminDroid Community ~~`n -ForegroundColor Green
-Write-Host "~~ Check out " -NoNewline -ForegroundColor Green; Write-Host "admindroid.com" -ForegroundColor Yellow -NoNewline; Write-Host " to get access to 1800+ Microsoft 365 reports. ~~" -ForegroundColor Green `n`n
   
 #Open Output file after execution
  if((Test-Path -Path $ExportCSV) -eq "True") 
  {
   Write-Host `The exported report contains $PrintedUsers users.
   Write-Host `nEntra users report available in: -NoNewline -Foregroundcolor Yellow; Write-Host $ExportCSV
-   $Prompt = New-Object -ComObject wscript.shell   
-  $UserInput = $Prompt.popup("Do you want to open output file?",`   
- 0,"Open Output File",4)   
-  If ($UserInput -eq 6)   
-  {   
-   Invoke-Item "$ExportCSV"   
-  } 
  }
  else
  {
