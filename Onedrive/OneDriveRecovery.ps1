@@ -7,9 +7,9 @@
 # ============================================================
 
 # --- CONFIG ---
-$UserPrincipalName = "usr@domain.com"        # Target user's UPN
-$FolderPath        = "/Directory"          # Relative path in OneDrive (blank = root)
-$ModifiedAfter     = [datetime]"2025-01-01"        # Cutoff date
+$UserPrincipalName = "gary.compagnon@clutchsolutions.com"        # Target user's UPN
+$FolderPath        = ""          # Relative path in OneDrive (blank = root)
+$ModifiedAfter     = [datetime]"2025-03-23"        # Cutoff date
 $OutputCsv         = "\OneDrive_Modified_Files.csv"
 # --------------
 
@@ -93,7 +93,16 @@ try {
             -Headers $headers
     }
 } catch {
-    throw "Could not resolve folder '$FolderPath' for user '$UserPrincipalName'. Check the UPN and folder path. Error: $_"
+    # Extract the actual Graph API error body if available
+    $detail = $_
+    if ($_.Exception.Response) {
+        try {
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = [System.IO.StreamReader]::new($stream)
+            $detail = $reader.ReadToEnd() | ConvertFrom-Json | Select-Object -ExpandProperty error | ForEach-Object { "$($_.code): $($_.message)" }
+        } catch { <# fall back to raw exception #> }
+    }
+    throw "Could not resolve OneDrive for '$UserPrincipalName'.`n  Graph error: $detail`n  Checklist:`n    1. UPN is correct`n    2. Run: az login (re-authenticate if token expired)`n    3. Your account has Files.Read.All or Sites.Read.All permission`n    4. The user has a OneDrive licence provisioned"
 }
 
 Write-Host "Indexing: '$($startItem.name)' for $UserPrincipalName..." -ForegroundColor Cyan
