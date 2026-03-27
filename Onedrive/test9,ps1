@@ -1,0 +1,29 @@
+$userId = "70ee6e97-4f36-4270-9242-59ba9e1a09f2"
+$spHost = "basecampresorts931-my.sharepoint.com"
+$personalPath = "personal/sky_basecampresorts_com"
+
+# Get a SharePoint-scoped token correctly
+Write-Host "[1] Getting SharePoint-scoped token..." -ForegroundColor Cyan
+$spToken = az account get-access-token --resource ("https://" + $spHost) --query accessToken -o tsv
+$spHeaders = @{ 
+    Authorization = "Bearer $spToken"
+    Accept = "application/json;odata=verbose"
+}
+
+# Try SharePoint REST API
+Write-Host "[2] Trying SharePoint REST API..." -ForegroundColor Cyan
+try {
+    $web = Invoke-RestMethod -Uri ("https://" + $spHost + "/" + $personalPath + "/_api/web/title") -Headers $spHeaders
+    Write-Host "Site accessible: $($web.d.Title)" -ForegroundColor Green
+} catch {
+    Write-Warning "SharePoint REST failed: $_"
+}
+
+# Try SharePoint REST to list files
+Write-Host "[3] Trying to list Documents folder..." -ForegroundColor Cyan
+try {
+    $files = Invoke-RestMethod -Uri ("https://" + $spHost + "/" + $personalPath + "/_api/web/GetFolderByServerRelativeUrl('Documents')/Files") -Headers $spHeaders
+    $files.d.results | Select-Object Name, TimeLastModified, Length | Format-Table -AutoSize
+} catch {
+    Write-Warning "File listing failed: $_"
+}
