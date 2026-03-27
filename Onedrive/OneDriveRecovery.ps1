@@ -7,9 +7,9 @@
 # ============================================================
 
 # --- CONFIG ---
-$UserPrincipalName = "gary.compagnon@clutchsolutions.com"        # Target user's UPN
+$UserPrincipalName = ""        # Target user's UPN
 $FolderPath        = ""          # Relative path in OneDrive (blank = root)
-$ModifiedAfter     = [datetime]"2025-03-23"        # Cutoff date
+$ModifiedAfter     = [datetime]"2026-03-23"        # Cutoff date
 $OutputCsv         = "\OneDrive_Modified_Files.csv"
 # --------------
 
